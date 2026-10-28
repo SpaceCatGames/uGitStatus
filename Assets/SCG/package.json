@@ -1,6 +1,6 @@
 {
   "name": "scg.unity.ugitstatus",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "displayName": "Unity Git Status",
   "description": "Lightweight Git status tools for Unity Editor. See file states in Project and Inspector, review diffs line by line, and stage, unstage, or revert selected changes.",
   "unity": "2021.3",

@@ -59,9 +59,91 @@ namespace SCG.UnityGitStatus
 
         private static bool s_loggedProjectBrowserReflectionFailure;
 
+        private static readonly Dictionary<int, (Rect Viewport, Rect Item, EventType Event)> s_footerPassByBrowser = new();
+
+        private static readonly object[] s_firstItemRectArguments = { 0, 0f };
+
+        private static readonly FieldInfo s_listAreaField = s_projectBrowserType
+            ?.GetField(Constants.ListAreaFieldName, BindingFlags.Instance | BindingFlags.NonPublic);
+
+        private static readonly FieldInfo s_groupsField = s_listAreaField?.FieldType
+            .GetField(Constants.GroupsFieldName, BindingFlags.Instance | BindingFlags.NonPublic);
+
+        private static readonly Type s_groupType = s_groupsField?.FieldType.GenericTypeArguments is { Length: 1 } groupTypes
+            ? groupTypes[0]
+            : null;
+
+        private static readonly FieldInfo s_gridField = s_groupType
+            ?.GetField(Constants.GridFieldName, BindingFlags.Instance | BindingFlags.Public);
+
+        private static readonly MethodInfo s_calcRectMethod = s_gridField?.FieldType
+            .GetMethod(Constants.CalcRectMethodName, BindingFlags.Instance | BindingFlags.Public,
+                null, new[] { typeof(int), typeof(float) }, null);
+
+        private static readonly PropertyInfo s_groupHeightProperty = s_groupType
+            ?.GetProperty(Constants.GroupHeightPropertyName, BindingFlags.Instance | BindingFlags.Public);
+
         #endregion
 
         #region Public API
+
+        /// <summary>
+        /// Resolves current list geometry on the first item callback of each GUI pass.
+        /// Unknown layouts are suppressed rather than estimated from earlier repaints.
+        /// </summary>
+        /// <param name="context">Browser associated with the current callback.</param>
+        /// <param name="itemRect">Current item rectangle in scroll-content coordinates.</param>
+        /// <param name="contentBottom">Bottom of the complete list content.</param>
+        /// <returns>True for the first item when all required geometry is available.</returns>
+        internal static bool TryGetDeletedFooterGeometry(
+            ProjectBrowserContext context, Rect itemRect, out float contentBottom)
+        {
+            contentBottom = float.NaN;
+            if (!ShouldResolveFooterGeometry(context.InstanceId, context.VisibleRect, itemRect, Event.current.rawType))
+                return false;
+
+            try
+            {
+                var list = s_listAreaField?.GetValue(context.ProjectBrowser);
+                if (list == null ||
+                    s_groupsField?.GetValue(list) is not IList { Count: 1 } groups)
+                    return false;
+
+                var group = groups[0];
+                var grid = s_gridField?.GetValue(group);
+                if (grid == null ||
+                    s_calcRectMethod?.Invoke(grid, s_firstItemRectArguments) is not Rect firstItemRect ||
+                    !Mathf.Approximately(itemRect.y, firstItemRect.y) ||
+                    itemRect.x < firstItemRect.xMin || itemRect.x >= firstItemRect.xMax ||
+                    s_groupHeightProperty?.GetValue(group) is not float height)
+                    return false;
+
+                contentBottom = height;
+                return true;
+            }
+            catch (Exception exception) when (
+            exception is ArgumentException
+                      or TargetException
+                      or TargetInvocationException
+                      or MemberAccessException)
+            {
+                ReportProjectBrowserReflectionFailure(exception);
+                return false;
+            }
+        }
+
+#if UNITY_INCLUDE_TESTS
+        /// <summary>
+        /// Evaluates callback traversal using controlled browser and event data.
+        /// </summary>
+        /// <param name="browserId">Browser identifier.</param>
+        /// <param name="viewport">Current clipping rectangle.</param>
+        /// <param name="itemRect">Current item rectangle.</param>
+        /// <param name="eventType">Unconsumed GUI event type.</param>
+        /// <returns>True when reflection should run for this callback.</returns>
+        internal static bool ShouldResolveFooterGeometryForTests(int browserId, Rect viewport, Rect itemRect, EventType eventType) =>
+            ShouldResolveFooterGeometry(browserId, viewport, itemRect, eventType);
+#endif
 
         /// <summary>
         /// Attempts to resolve the Project Browser context associated with the current Project row callback.
@@ -199,6 +281,25 @@ namespace SCG.UnityGitStatus
         #endregion
 
         #region Helpers
+
+        /// <summary>
+        /// Tracks ordered item traversal separately for each browser and skips subsequent callbacks in a GUI pass.
+        /// A changed event, viewport, or item size, or a return to an earlier item, starts a new traversal.
+        /// </summary>
+        /// <param name="browserId">Browser identifier.</param>
+        /// <param name="viewport">Current clipping rectangle.</param>
+        /// <param name="itemRect">Current item rectangle.</param>
+        /// <param name="eventType">Unconsumed GUI event type.</param>
+        /// <returns>True for the first callback of a traversal.</returns>
+        private static bool ShouldResolveFooterGeometry(int browserId, Rect viewport, Rect itemRect, EventType eventType)
+        {
+            var continuesPass = s_footerPassByBrowser.TryGetValue(browserId, out var previous) &&
+                previous.Event == eventType && previous.Viewport == viewport &&
+                previous.Item.size == itemRect.size &&
+                (itemRect.y > previous.Item.y || (Mathf.Approximately(itemRect.y, previous.Item.y) && itemRect.x > previous.Item.x));
+            s_footerPassByBrowser[browserId] = (viewport, itemRect, eventType);
+            return !continuesPass;
+        }
 
         private static ProjectBrowserPane ResolvePane(
             bool isTwoColumns,

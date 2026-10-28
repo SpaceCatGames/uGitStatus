@@ -32,9 +32,16 @@ namespace SCG.UnityGitStatus
 
         /// <summary>Internal ProjectBrowser field name containing the main list area rect.</summary>
         public const string ListAreaRectFieldName = "m_ListAreaRect";
+        /// <summary>Project Browser field holding its item list.</summary>
+        public const string ListAreaFieldName = "m_ListArea";
 
         /// <summary>Internal ProjectBrowser field name containing the left tree pane rect.</summary>
         public const string TreeViewRectFieldName = "m_TreeViewRect";
+
+        /// <summary>List field holding its content groups.</summary>
+        public const string GroupsFieldName = "m_Groups";
+        /// <summary>Group field holding its item grid.</summary>
+        public const string GridFieldName = "m_Grid";
 
         /// <summary>Internal ProjectBrowser static field containing the last interacted Project Browser window.</summary>
         public const string LastInteractedProjectBrowserFieldName = "s_LastInteractedProjectBrowser";
@@ -50,5 +57,10 @@ namespace SCG.UnityGitStatus
 
         /// <summary>Internal Editor property name indicating whether the editor is the first inspected editor.</summary>
         public const string FirstInspectedEditorPropertyName = "firstInspectedEditor";
+
+        /// <summary>Grid method returning an item rectangle.</summary>
+        public const string CalcRectMethodName = "CalcRect";
+        /// <summary>Group property returning its complete content height.</summary>
+        public const string GroupHeightPropertyName = "Height";
     }
 }

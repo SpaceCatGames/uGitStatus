@@ -15,12 +15,6 @@ namespace SCG.UnityGitStatus
     {
         private static GUIStyle s_deletedFooterItemStyle;
         private static GUIStyle s_deletedFooterBackgroundStyle;
-        private static readonly Dictionary<int, int> s_footerMeasureFrameByProjectBrowser = new();
-        private static readonly Dictionary<int, float> s_currentFooterMeasureMaxRowBottomByProjectBrowser = new();
-        private static readonly Dictionary<int, float> s_previousFooterMeasureMaxRowBottomByProjectBrowser = new();
-        private static int s_lastFooterFrame;
-        private static EventType s_lastFooterEventType;
-        private static int s_lastFooterProjectBrowserInstanceId;
 
         /// <summary>
         /// Draws the deleted-files footer for the current Project window callback when the active context qualifies.
@@ -39,12 +33,7 @@ namespace SCG.UnityGitStatus
                 !context.IsRightPane)
                 return;
 
-            if (!IsSelectionInRightPane(context, selectionRect))
-                return;
-
-            TrackFooterRepaintMeasurement(context, GetRowBottomInVisibleRectSpace(context, selectionRect));
-
-            if (!ShouldDrawFooterForCurrentEvent(context))
+            if (!ProjectBrowserContextResolver.TryGetDeletedFooterGeometry(context, selectionRect, out var contentBottom))
                 return;
 
             var contextFolderPath = ProjectBrowserContextResolver.GetActiveFolderPath(context);
@@ -60,19 +49,22 @@ namespace SCG.UnityGitStatus
             }
 
             var isExpanded = UnityGitStatusSettings.ShowProjectDeletedEntries;
-            var availableHeight = GetAvailableFooterHeight(context);
+            var lineHeight = EditorGUIUtility.singleLineHeight;
+            var availableHeight = GetAvailableFooterHeight(context.VisibleRect, contentBottom);
             CalculateFooterRows(
                 deletedEntries.Count,
                 isExpanded,
                 availableHeight,
+                lineHeight,
                 out var visibleItemCount,
                 out var showSummaryRow);
             var footerRect = GetDeletedFooterRect(
                 context.VisibleRect,
                 visibleItemCount,
-                showSummaryRow);
+                showSummaryRow,
+                lineHeight);
 
-            if (!HasEnoughFooterSpace(GetDeletedFooterTopInVisibleRectSpace(context, visibleItemCount, showSummaryRow), context))
+            if (footerRect.height > availableHeight)
             {
                 return;
             }
@@ -81,7 +73,7 @@ namespace SCG.UnityGitStatus
                 footerRect.x + Constants.ProjectDeletedFooterPadding,
                 footerRect.y + Constants.ProjectDeletedFooterPadding,
                 footerRect.width - Constants.ProjectDeletedFooterPadding * 2f,
-                EditorGUIUtility.singleLineHeight);
+                lineHeight);
 
             if (Event.current.type == EventType.Repaint)
             {
@@ -104,7 +96,6 @@ namespace SCG.UnityGitStatus
                 return;
             }
 
-            var lineHeight = EditorGUIUtility.singleLineHeight;
             var y = headerRect.yMax + Constants.ProjectDeletedFooterRowSpacing;
             var itemStyle = GetDeletedFooterItemStyle();
 
@@ -127,9 +118,9 @@ namespace SCG.UnityGitStatus
                 itemStyle);
         }
 
-        private static Rect GetDeletedFooterRect(Rect visibleRect, int visibleItemCount, bool showSummaryRow)
+        private static Rect GetDeletedFooterRect(Rect visibleRect, int visibleItemCount, bool showSummaryRow, float lineHeight)
         {
-            var height = GetDeletedFooterHeight(visibleItemCount, showSummaryRow);
+            var height = GetDeletedFooterHeight(visibleItemCount, showSummaryRow, lineHeight);
             return new Rect(
                 visibleRect.x + Constants.ProjectDeletedFooterPadding,
                 visibleRect.yMax - height - Constants.ProjectDeletedFooterPadding,
@@ -151,21 +142,40 @@ namespace SCG.UnityGitStatus
             return filteredEntries;
         }
 
-        private static float GetAvailableFooterHeight(ProjectBrowserContext context)
-        {
-            var previousMaxRowBottom = GetPreviousFooterMeasureMaxRowBottom(context);
+        private static float GetAvailableFooterHeight(Rect visibleRect, float contentBottom) =>
+            float.IsNaN(contentBottom) || float.IsInfinity(contentBottom) ||
+            contentBottom < 0f || visibleRect.width <= 0f || visibleRect.height <= 0f
+                ? 0f
+                : Mathf.Max(0f, visibleRect.yMax - Mathf.Max(visibleRect.yMin, contentBottom) - Constants.ProjectDeletedFooterPadding);
 
-            return float.IsNegativeInfinity(previousMaxRowBottom)
-                ? float.PositiveInfinity
-                : Mathf.Max(
-                    0f,
-                    context.VisibleRect.height - previousMaxRowBottom - Constants.ProjectDeletedFooterPadding);
+#if UNITY_INCLUDE_TESTS
+        /// <summary>
+        /// Calculates footer placement for controlled geometry without drawing editor controls.
+        /// </summary>
+        /// <param name="visibleRect">Viewport in scroll-content coordinates.</param>
+        /// <param name="contentBottom">Complete content bottom, or NaN when unknown.</param>
+        /// <param name="count">Number of deleted files.</param>
+        /// <param name="expanded">Whether file rows are expanded.</param>
+        /// <param name="rect">Calculated footer rectangle.</param>
+        /// <param name="visibleCount">Number of displayed file rows.</param>
+        /// <param name="summary">Whether a remaining-files row is displayed.</param>
+        /// <param name="lineHeight">Controlled text row height in pixels.</param>
+        /// <returns>True when the footer fits in the unoccupied viewport.</returns>
+        internal static bool TryGetLayoutForTests(Rect visibleRect, float contentBottom, int count, bool expanded,
+            out Rect rect, out int visibleCount, out bool summary, float lineHeight = 20f)
+        {
+            var availableHeight = GetAvailableFooterHeight(visibleRect, contentBottom);
+            CalculateFooterRows(count, expanded, availableHeight, lineHeight, out visibleCount, out summary);
+            rect = GetDeletedFooterRect(visibleRect, visibleCount, summary, lineHeight);
+            return count > 0 && rect.height <= availableHeight;
         }
+#endif
 
         private static void CalculateFooterRows(
             int deletedEntryCount,
             bool isExpanded,
             float availableHeight,
+            float lineHeight,
             out int visibleItemCount,
             out bool showSummaryRow)
         {
@@ -175,15 +185,8 @@ namespace SCG.UnityGitStatus
             if (!isExpanded || deletedEntryCount <= 0)
                 return;
 
-            if (float.IsPositiveInfinity(availableHeight))
-            {
-                visibleItemCount = Mathf.Min(deletedEntryCount, Constants.ProjectDeletedFooterMaxVisibleItems);
-                showSummaryRow = deletedEntryCount > visibleItemCount;
-                return;
-            }
-
-            var collapsedHeight = GetDeletedFooterHeight(0, false);
-            var rowHeight = EditorGUIUtility.singleLineHeight + Constants.ProjectDeletedFooterRowSpacing;
+            var collapsedHeight = GetDeletedFooterHeight(0, false, lineHeight);
+            var rowHeight = lineHeight + Constants.ProjectDeletedFooterRowSpacing;
             var rowsCapacity = Mathf.Max(0, Mathf.FloorToInt((availableHeight - collapsedHeight) / rowHeight));
 
             if (rowsCapacity <= 0)
@@ -193,7 +196,7 @@ namespace SCG.UnityGitStatus
 
             var preferredVisibleItemCount = Mathf.Min(deletedEntryCount, Constants.ProjectDeletedFooterMaxVisibleItems);
 
-            if (deletedEntryCount <= preferredVisibleItemCount)
+            if (deletedEntryCount <= preferredVisibleItemCount && rowsCapacity >= deletedEntryCount)
             {
                 visibleItemCount = Mathf.Min(rowsCapacity, deletedEntryCount);
                 return;
@@ -209,9 +212,8 @@ namespace SCG.UnityGitStatus
             showSummaryRow = deletedEntryCount > visibleItemCount;
         }
 
-        private static float GetDeletedFooterHeight(int visibleItemCount, bool showSummaryRow)
+        private static float GetDeletedFooterHeight(int visibleItemCount, bool showSummaryRow, float lineHeight)
         {
-            var lineHeight = EditorGUIUtility.singleLineHeight;
             var contentLineCount = 1 + visibleItemCount + (showSummaryRow ? 1 : 0);
             return
                 Constants.ProjectDeletedFooterPadding * 2f +
@@ -232,123 +234,6 @@ namespace SCG.UnityGitStatus
         private static bool IsRelevantProjectEvent(EventType eventType) =>
             eventType is EventType.Layout or EventType.Repaint or EventType.MouseDown or EventType.MouseUp;
 
-        private static void TrackFooterRepaintMeasurement(ProjectBrowserContext context, float measuredRowBottom)
-        {
-            if (Event.current.type != EventType.Repaint)
-            {
-                return;
-            }
-
-            var instanceId = context.InstanceId;
-
-            if (!s_footerMeasureFrameByProjectBrowser.TryGetValue(instanceId, out var trackedFrame) ||
-                trackedFrame != Time.frameCount)
-            {
-                s_previousFooterMeasureMaxRowBottomByProjectBrowser[instanceId] =
-                    s_currentFooterMeasureMaxRowBottomByProjectBrowser.GetValueOrDefault(instanceId, float.NegativeInfinity);
-                s_footerMeasureFrameByProjectBrowser[instanceId] = Time.frameCount;
-                s_currentFooterMeasureMaxRowBottomByProjectBrowser[instanceId] = measuredRowBottom;
-                return;
-            }
-
-            s_currentFooterMeasureMaxRowBottomByProjectBrowser[instanceId] =
-                s_currentFooterMeasureMaxRowBottomByProjectBrowser.TryGetValue(instanceId, out var maxRowBottom)
-                    ? Mathf.Max(maxRowBottom, measuredRowBottom)
-                    : measuredRowBottom;
-        }
-
-        private static bool HasEnoughFooterSpace(float footerTop, ProjectBrowserContext context)
-        {
-            var previousMaxRowBottom = GetPreviousFooterMeasureMaxRowBottom(context);
-            return float.IsNegativeInfinity(previousMaxRowBottom) || previousMaxRowBottom <= footerTop;
-        }
-
-        private static float GetPreviousFooterMeasureMaxRowBottom(ProjectBrowserContext context) =>
-            s_previousFooterMeasureMaxRowBottomByProjectBrowser.GetValueOrDefault(context.InstanceId, float.NegativeInfinity);
-
-        private static bool IsSelectionInRightPane(ProjectBrowserContext context, Rect selectionRect)
-        {
-            var translatedSelectionRect = new Rect(
-                selectionRect.x + context.VisibleRect.x,
-                selectionRect.y + context.VisibleRect.y,
-                selectionRect.width,
-                selectionRect.height);
-            var rawListScore = GetOverlapScore(selectionRect, context.ListAreaRect);
-            var rawTreeScore = GetOverlapScore(selectionRect, context.TreeViewRect);
-            var translatedListScore = GetOverlapScore(translatedSelectionRect, context.ListAreaRect);
-            var translatedTreeScore = GetOverlapScore(translatedSelectionRect, context.TreeViewRect);
-            var rawBestScore = Mathf.Max(rawListScore, rawTreeScore);
-            var translatedBestScore = Mathf.Max(translatedListScore, translatedTreeScore);
-            var useTranslatedSelectionRect = translatedBestScore > rawBestScore;
-            var listScore = useTranslatedSelectionRect ? translatedListScore : rawListScore;
-            var treeScore = useTranslatedSelectionRect ? translatedTreeScore : rawTreeScore;
-
-            return listScore > 0f && listScore > treeScore;
-        }
-
-        private static float GetRowBottomInVisibleRectSpace(ProjectBrowserContext context, Rect selectionRect)
-        {
-            const float tolerance = 6f;
-            var rawBottom = selectionRect.yMax;
-            var offsetBottom = selectionRect.yMax - context.VisibleRect.yMin;
-            var visibleHeight = context.VisibleRect.height;
-            var rawFits = rawBottom >= -tolerance && rawBottom <= visibleHeight + tolerance;
-            var offsetFits = offsetBottom >= -tolerance && offsetBottom <= visibleHeight + tolerance;
-
-            if (rawFits && !offsetFits)
-            {
-                return Mathf.Clamp(rawBottom, 0f, visibleHeight);
-            }
-
-            if (offsetFits && !rawFits)
-            {
-                return Mathf.Clamp(offsetBottom, 0f, visibleHeight);
-            }
-
-            var rawDistance = GetDistanceToRange(rawBottom, 0f, visibleHeight);
-            var offsetDistance = GetDistanceToRange(offsetBottom, 0f, visibleHeight);
-            var localBottom = offsetDistance < rawDistance ? offsetBottom : rawBottom;
-            return Mathf.Clamp(localBottom, 0f, visibleHeight);
-        }
-
-        private static float GetDeletedFooterTopInVisibleRectSpace(
-            ProjectBrowserContext context,
-            int visibleItemCount,
-            bool showSummaryRow)
-        {
-            var footerHeight = GetDeletedFooterHeight(visibleItemCount, showSummaryRow);
-            return Mathf.Max(0f, context.VisibleRect.height - footerHeight - Constants.ProjectDeletedFooterPadding);
-        }
-
-        private static float GetDistanceToRange(float value, float min, float max) =>
-            value < min
-                ? min - value
-                : value > max
-                    ? value - max
-                    : 0f;
-
-        private static float GetOverlapScore(Rect source, Rect target)
-        {
-            var xMin = Mathf.Max(source.xMin, target.xMin);
-            var yMin = Mathf.Max(source.yMin, target.yMin);
-            var xMax = Mathf.Min(source.xMax, target.xMax);
-            var yMax = Mathf.Min(source.yMax, target.yMax);
-
-            return xMax <= xMin || yMax <= yMin ? 0f : (xMax - xMin) * (yMax - yMin);
-        }
-
-        private static bool ShouldDrawFooterForCurrentEvent(ProjectBrowserContext context)
-        {
-            if (s_lastFooterFrame == Time.frameCount &&
-                s_lastFooterEventType == Event.current.type &&
-                s_lastFooterProjectBrowserInstanceId == context.InstanceId)
-                return false;
-
-            s_lastFooterFrame = Time.frameCount;
-            s_lastFooterEventType = Event.current.type;
-            s_lastFooterProjectBrowserInstanceId = context.InstanceId;
-            return true;
-        }
 
         private static string GetFileName(string path)
         {

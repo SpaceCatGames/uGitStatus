@@ -64,6 +64,7 @@ namespace SCG.UnityGitStatus
         private const float PreChangesSpacing = 8f;
         private const int ChangesSectionHeaderFontSizeDelta = 3;
         private const int ChangedPathsSectionHeaderFontSizeDelta = 1;
+        private const int EntriesPerPage = 50;
 
         #endregion
 
@@ -144,6 +145,7 @@ namespace SCG.UnityGitStatus
         private GUIStyle changedPathsSectionHeaderStyle;
         private string pathSearch = string.Empty;
         private bool scrollToSelectedEntry;
+        private int currentPage;
 
         #endregion
 
@@ -374,8 +376,10 @@ namespace SCG.UnityGitStatus
 
             var preferDisplayPath = !UnityGitStatusSettings.ShowMetaFiles;
             var windowEntries = GetWindowEntries(currentSnapshot, preferDisplayPath);
-            HandleEntryKeyboardNavigation(windowEntries, preferDisplayPath);
-            DrawChangesWorkspace(windowEntries, preferDisplayPath);
+            var matchingEntries = windowEntries.FindAll(entry => ShouldShowEntry(entry) && MatchesPathSearch(entry, preferDisplayPath));
+            currentPage = Mathf.Clamp(currentPage, 0, Mathf.Max(0, (matchingEntries.Count - 1) / EntriesPerPage));
+            HandleEntryKeyboardNavigation(matchingEntries);
+            DrawChangesWorkspace(matchingEntries, preferDisplayPath, windowEntries.Count == 0);
 
             EditorGUILayout.Space(Constants.WindowFooterTopSpacing);
             DrawFooter(currentSnapshot);

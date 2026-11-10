@@ -36,7 +36,7 @@ namespace SCG.UnityGitStatus
 
         #region Workspace
 
-        private void DrawChangesWorkspace(IReadOnlyList<GitStatusEntry> entries, bool preferDisplayPath)
+        private void DrawChangesWorkspace(IReadOnlyList<GitStatusEntry> entries, bool preferDisplayPath, bool noEntries)
         {
             var hasSelection = selectedEntry != null && !string.IsNullOrEmpty(selectedPath);
             var availableWidth = Mathf.Max(0f, position.width - 12f);
@@ -62,7 +62,7 @@ namespace SCG.UnityGitStatus
 
                 using (new EditorGUILayout.VerticalScope(GUILayout.Width(leftWidth), GUILayout.ExpandHeight(true)))
                 {
-                    DrawEntries(entries, preferDisplayPath);
+                    DrawEntries(entries, preferDisplayPath, noEntries);
                 }
 
                 if (!hasSelection) return;
@@ -75,24 +75,50 @@ namespace SCG.UnityGitStatus
             }
         }
 
-        private void DrawEntries(IReadOnlyList<GitStatusEntry> entries, bool preferDisplayPath)
+        private void DrawEntries(IReadOnlyList<GitStatusEntry> entries, bool preferDisplayPath, bool noEntries)
         {
             scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition, GUILayout.ExpandHeight(true));
-            var matchingEntriesCount = 0;
+            var startIndex = currentPage * EntriesPerPage;
+            var endIndex = Mathf.Min(startIndex + EntriesPerPage, entries.Count);
 
-            foreach (var entry in entries)
+            for (var i = startIndex; i < endIndex; i++)
             {
-                if (!ShouldShowEntry(entry) || !MatchesPathSearch(entry, preferDisplayPath)) continue;
-                matchingEntriesCount++;
-                DrawEntry(entry, preferDisplayPath);
+                DrawEntry(entries[i], preferDisplayPath);
             }
 
-            if (matchingEntriesCount == 0)
+            if (entries.Count == 0)
             {
-                EditorGUILayout.LabelField(entries.Count == 0 ? NoChangedPathsText : NoChangedPathsMatchSearchText);
+                EditorGUILayout.LabelField(noEntries ? NoChangedPathsText : NoChangedPathsMatchSearchText);
             }
 
             EditorGUILayout.EndScrollView();
+
+            var pageCount = Mathf.Max(1, (entries.Count + EntriesPerPage - 1) / EntriesPerPage);
+            if (pageCount <= 1) return;
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                using (new EditorGUI.DisabledScope(currentPage == 0))
+                {
+                    if (GUILayout.Button("<"))
+                    {
+                        currentPage--;
+                        scrollPosition = Vector2.zero;
+                    }
+                }
+
+                GUILayout.Label($"{currentPage + 1} / {pageCount}", EditorStyles.centeredGreyMiniLabel);
+
+                using (new EditorGUI.DisabledScope(currentPage >= pageCount - 1))
+                {
+                    // ReSharper disable once InvertIf
+                    if (GUILayout.Button(">"))
+                    {
+                        currentPage++;
+                        scrollPosition = Vector2.zero;
+                    }
+                }
+            }
         }
 
         private void DrawSplitter(float availableWidth)

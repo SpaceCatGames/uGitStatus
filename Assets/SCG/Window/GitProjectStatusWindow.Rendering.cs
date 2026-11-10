@@ -118,9 +118,7 @@ namespace SCG.UnityGitStatus
             LoadSelectedDiffs();
         }
 
-        private void HandleEntryKeyboardNavigation(
-            IReadOnlyList<GitStatusEntry> entries,
-            bool preferDisplayPath)
+        private void HandleEntryKeyboardNavigation(List<GitStatusEntry> entries)
         {
             var currentEvent = Event.current;
             if (focusedWindow != this || currentEvent.type != EventType.KeyDown ||
@@ -128,17 +126,15 @@ namespace SCG.UnityGitStatus
                 currentEvent.alt || currentEvent.control || currentEvent.command ||
                 currentEvent.keyCode is not (KeyCode.UpArrow or KeyCode.DownArrow)) return;
 
-            var visibleEntries = entries
-                .Where(entry => ShouldShowEntry(entry) && MatchesPathSearch(entry, preferDisplayPath))
-                .ToList();
-            var selectedIndex = visibleEntries.FindIndex(entry => GitPathComparer.AreEqual(entry.Path, selectedPath));
+            var selectedIndex = entries.FindIndex(entry => GitPathComparer.AreEqual(entry.Path, selectedPath));
             if (selectedIndex < 0) return;
 
             var offset = currentEvent.keyCode == KeyCode.UpArrow ? -1 : 1;
-            var nextIndex = Mathf.Clamp(selectedIndex + offset, 0, visibleEntries.Count - 1);
+            var nextIndex = Mathf.Clamp(selectedIndex + offset, 0, entries.Count - 1);
             if (nextIndex == selectedIndex) return;
 
-            SelectEntry(visibleEntries[nextIndex]);
+            SelectEntry(entries[nextIndex]);
+            currentPage = nextIndex / EntriesPerPage;
             scrollToSelectedEntry = true;
             currentEvent.Use();
             Repaint();
